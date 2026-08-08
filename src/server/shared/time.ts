@@ -23,9 +23,14 @@ export function addDays(dateIso: string, days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** An ISO timestamp `days` before now, used by the 14 day admin reports. */
-export function daysAgoIso(days: number, now: Date = new Date()): string {
+/** `YYYY-MM-DD`, `days` before now. The look-back bound for the admin reports. */
+export function daysAgo(days: number, now: Date = new Date()): string {
   const d = new Date(now);
   d.setDate(d.getDate() - days);
-  return d.toISOString();
+  return d.toISOString().slice(0, 10);
+}
+
+/** `YYYY-MM-DD`, `days` after now. The look-ahead bound for expiry reports. */
+export function daysAhead(days: number, now: Date = new Date()): string {
+  return new Date(now.getTime() + days * 86_400_000).toISOString().slice(0, 10);
 }

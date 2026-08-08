@@ -10,10 +10,12 @@ import {
   membershipPlans,
 } from "@/db/schema";
 import { router, adminProcedure } from "../trpc";
+import { today, daysAgo, daysAhead } from "@/server/shared/time";
+import { REPORT_WINDOW_DAYS, EXPIRING_SOON_DAYS } from "@/server/shared/policy";
 
 export const adminRouter = router({
   stats: adminProcedure.query(async ({ ctx }) => {
-    const today = new Date().toISOString().slice(0, 10);
+    const asOf = today();
     const now = new Date().toISOString();
 
     const [{ totalMembers }] = await ctx.db
@@ -27,7 +29,7 @@ export const adminRouter = router({
       .where(
         and(
           eq(memberships.status, "active"),
-          sql`${memberships.endDate} >= ${today}`,
+          sql`${memberships.endDate} >= ${asOf}`,
         ),
       );
 
@@ -123,10 +125,8 @@ export const adminRouter = router({
   }),
 
   expiringMemberships: adminProcedure.query(async ({ ctx }) => {
-    const today = new Date().toISOString().slice(0, 10);
-    const in14Days = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
-      .toISOString()
-      .slice(0, 10);
+    const from = today();
+    const until = daysAhead(EXPIRING_SOON_DAYS);
 
     const rows = await ctx.db
       .select({
@@ -142,8 +142,8 @@ export const adminRouter = router({
       .where(
         and(
           eq(memberships.status, "active"),
-          gte(memberships.endDate, today),
-          lte(memberships.endDate, in14Days),
+          gte(memberships.endDate, from),
+          lte(memberships.endDate, until),
         ),
       )
       .orderBy(memberships.endDate);
@@ -161,9 +161,7 @@ export const adminRouter = router({
   }),
 
   checkinsPerDay: adminProcedure.query(async ({ ctx }) => {
-    const start = new Date();
-    start.setDate(start.getDate() - 14);
-    const startStr = start.toISOString().slice(0, 10);
+    const startStr = daysAgo(REPORT_WINDOW_DAYS);
 
     const rows = await ctx.db
       .select({
@@ -182,9 +180,7 @@ export const adminRouter = router({
   }),
 
   topTrainers: adminProcedure.query(async ({ ctx }) => {
-    const start = new Date();
-    start.setDate(start.getDate() - 14);
-    const startStr = start.toISOString().slice(0, 10);
+    const startStr = daysAgo(REPORT_WINDOW_DAYS);
 
     const rows = await ctx.db
       .select({
@@ -215,9 +211,7 @@ export const adminRouter = router({
   }),
 
   noShowList: adminProcedure.query(async ({ ctx }) => {
-    const start = new Date();
-    start.setDate(start.getDate() - 14);
-    const startStr = start.toISOString().slice(0, 10);
+    const startStr = daysAgo(REPORT_WINDOW_DAYS);
 
     const rows = await ctx.db
       .select({

@@ -3,12 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { membershipPlans, memberships, payments } from "@/db/schema";
 import { router, publicProcedure, protectedProcedure, adminProcedure } from "../trpc";
-
-function addDays(dateIso: string, days: number): string {
-  const d = new Date(dateIso);
-  d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
-}
+import { addDays, today } from "@/server/shared/time";
 
 export const plansRouter = router({
   list: publicProcedure
@@ -42,15 +37,17 @@ export const plansRouter = router({
         });
       }
 
-      const today = new Date().toISOString().slice(0, 10);
+      // Nothing checks for an existing active membership, so buying a second
+      // plan stacks them. See documents/findings.md, finding 14.
+      const startDate = today();
 
       const membership = await ctx.db
         .insert(memberships)
         .values({
           userId: ctx.user.id,
           planId: plan.id,
-          startDate: today,
-          endDate: addDays(today, plan.durationDays),
+          startDate,
+          endDate: addDays(startDate, plan.durationDays),
           creditsRemaining: plan.classCredits,
           status: "active",
         })
