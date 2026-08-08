@@ -1,42 +1,19 @@
+/**
+ * Personal bookings: transport only.
+ *
+ * The booking and cancellation rules live in server/modules/booking. What is
+ * left here is input validation, the queries that feed a specific screen, and
+ * the mapping from one to the other.
+ */
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
-import { bookings, classes, memberships, checkins, users } from "@/db/schema";
+import { and, asc, eq, sql } from "drizzle-orm";
+import { bookings, classes, checkins, users } from "@/db/schema";
 import { router, protectedProcedure, staffProcedure } from "../trpc";
-
-/**
- * Members may cancel free of charge up to this many hours before the class
- * starts. Cancelling later still frees the spot but forfeits the credit.
- */
-export const FREE_CANCELLATION_HOURS = 12;
-
-/** Plans with this many credits are treated as unlimited and never decrement. */
-export const UNLIMITED_CREDITS = 999;
-
-function hoursUntil(iso: string, now = new Date()): number {
-  return (new Date(iso).getTime() - now.getTime()) / 36e5;
-}
-
-async function activeMembershipFor(
-  db: typeof import("@/db").db,
-  userId: number,
-) {
-  const today = new Date().toISOString().slice(0, 10);
-  return db
-    .select()
-    .from(memberships)
-    .where(
-      and(
-        eq(memberships.userId, userId),
-        eq(memberships.status, "active"),
-        sql`${memberships.endDate} >= ${today}`,
-      ),
-    )
-    .orderBy(desc(memberships.endDate))
-    .get();
-}
+import { personalSeats } from "../modules/booking";
 
 export const bookingsRouter = router({
+  /** Everything this member has booked. Past classes are excluded by default. */
   mine: protectedProcedure
     .input(z.object({ includePast: z.boolean().default(false) }).default({}))
     .query(async ({ ctx, input }) => {
@@ -59,201 +36,18 @@ export const bookingsRouter = router({
         .orderBy(asc(classes.startsAt));
 
       const now = new Date();
-      return rows.filter((r) =>
-        input.includePast ? true : new Date(r.startsAt) >= now,
-      );
+      return rows.filter((r) => (input.includePast ? true : new Date(r.startsAt) >= now));
     }),
 
   book: protectedProcedure
     .input(z.object({ classId: z.number() }))
-    .mutation(async ({ ctx, input }) => {
-      const cls = await ctx.db
-        .select()
-        .from(classes)
-        .where(eq(classes.id, input.classId))
-        .get();
-
-      if (!cls) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Class not found." });
-      }
-      if (cls.cancelled) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "This class has been cancelled.",
-        });
-      }
-      if (hoursUntil(cls.startsAt) <= 0) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "This class has already started.",
-        });
-      }
-
-      const existing = await ctx.db
-        .select()
-        .from(bookings)
-        .where(
-          and(
-            eq(bookings.classId, cls.id),
-            eq(bookings.userId, ctx.user.id),
-            inArray(bookings.status, ["booked", "waitlisted"]),
-          ),
-        )
-        .get();
-
-      if (existing) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: "You are already on the list for this class.",
-        });
-      }
-
-      const membership = await activeMembershipFor(ctx.db, ctx.user.id);
-      if (!membership) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "An active membership is required to book classes.",
-        });
-      }
-
-      const unlimited = membership.creditsRemaining >= UNLIMITED_CREDITS;
-      if (!unlimited && membership.creditsRemaining < cls.creditCost) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "Not enough class credits remaining.",
-        });
-      }
-
-      const [{ count }] = await ctx.db
-        .select({ count: sql<number>`count(*)` })
-        .from(bookings)
-        .where(
-          and(eq(bookings.classId, cls.id), eq(bookings.status, "booked")),
-        );
-
-      const isFull = Number(count) >= cls.capacity;
-
-      const created = await ctx.db
-        .insert(bookings)
-        .values({
-          classId: cls.id,
-          userId: ctx.user.id,
-          membershipId: membership.id,
-          status: isFull ? "waitlisted" : "booked",
-          creditsUsed: isFull ? 0 : cls.creditCost,
-        })
-        .returning()
-        .get();
-
-      if (!isFull && !unlimited) {
-        await ctx.db
-          .update(memberships)
-          .set({ creditsRemaining: membership.creditsRemaining - cls.creditCost })
-          .where(eq(memberships.id, membership.id));
-      }
-
-      return created;
-    }),
+    .mutation(({ ctx, input }) => personalSeats.book(ctx.db, ctx.user.id, input.classId)),
 
   cancel: protectedProcedure
     .input(z.object({ bookingId: z.number() }))
-    .mutation(async ({ ctx, input }) => {
-      const row = await ctx.db
-        .select({ booking: bookings, cls: classes })
-        .from(bookings)
-        .innerJoin(classes, eq(bookings.classId, classes.id))
-        .where(eq(bookings.id, input.bookingId))
-        .get();
+    .mutation(({ ctx, input }) => personalSeats.cancel(ctx.db, ctx.user, input.bookingId)),
 
-      if (!row) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Booking not found." });
-      }
-
-      const isOwner = row.booking.userId === ctx.user.id;
-      const isStaff = ctx.user.role === "admin" || ctx.user.role === "trainer";
-      if (!isOwner && !isStaff) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
-          message: "You cannot cancel this booking.",
-        });
-      }
-
-      if (row.booking.status !== "booked" && row.booking.status !== "waitlisted") {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "This booking is no longer active.",
-        });
-      }
-
-      const refundable =
-        hoursUntil(row.cls.startsAt) >= FREE_CANCELLATION_HOURS &&
-        row.booking.creditsUsed > 0;
-
-      await ctx.db
-        .update(bookings)
-        .set({ status: "cancelled", cancelledAt: new Date().toISOString() })
-        .where(eq(bookings.id, row.booking.id));
-
-      if (refundable && row.booking.membershipId) {
-        const ms = await ctx.db
-          .select()
-          .from(memberships)
-          .where(eq(memberships.id, row.booking.membershipId))
-          .get();
-
-        if (ms && ms.creditsRemaining < UNLIMITED_CREDITS) {
-          await ctx.db
-            .update(memberships)
-            .set({ creditsRemaining: ms.creditsRemaining + row.booking.creditsUsed })
-            .where(eq(memberships.id, ms.id));
-        }
-      }
-
-      // Freeing a confirmed spot promotes the member who has waited longest.
-      if (row.booking.status === "booked") {
-        const next = await ctx.db
-          .select()
-          .from(bookings)
-          .where(
-            and(
-              eq(bookings.classId, row.cls.id),
-              eq(bookings.status, "waitlisted"),
-            ),
-          )
-          .orderBy(asc(bookings.bookedAt))
-          .get();
-
-        if (next) {
-          await ctx.db
-            .update(bookings)
-            .set({ status: "booked", creditsUsed: row.cls.creditCost })
-            .where(eq(bookings.id, next.id));
-
-          if (next.membershipId) {
-            const ms = await ctx.db
-              .select()
-              .from(memberships)
-              .where(eq(memberships.id, next.membershipId))
-              .get();
-
-            if (ms && ms.creditsRemaining < UNLIMITED_CREDITS) {
-              await ctx.db
-                .update(memberships)
-                .set({
-                  creditsRemaining: Math.max(
-                    0,
-                    ms.creditsRemaining - row.cls.creditCost,
-                  ),
-                })
-                .where(eq(memberships.id, ms.id));
-            }
-          }
-        }
-      }
-
-      return { ok: true, refunded: refundable };
-    }),
-
+  /** Front desk and kiosk check-in. */
   markAttended: staffProcedure
     .input(
       z.object({
@@ -292,10 +86,11 @@ export const bookingsRouter = router({
       return { ok: true };
     }),
 
+  /** Everyone on the list for a class, in the order they joined. */
   rosterFor: staffProcedure
     .input(z.object({ classId: z.number() }))
-    .query(async ({ ctx, input }) => {
-      return ctx.db
+    .query(({ ctx, input }) =>
+      ctx.db
         .select({
           bookingId: bookings.id,
           status: bookings.status,
@@ -307,14 +102,15 @@ export const bookingsRouter = router({
         .from(bookings)
         .innerJoin(users, eq(bookings.userId, users.id))
         .where(eq(bookings.classId, input.classId))
-        .orderBy(asc(bookings.bookedAt));
-    }),
+        .orderBy(asc(bookings.bookedAt)),
+    ),
 
+  /** Drives the kiosk: what this member could be checked in to right now. */
   upcomingForMember: staffProcedure
     .input(z.object({ userId: z.number(), hoursAhead: z.number().default(2) }))
-    .query(async ({ ctx, input }) => {
+    .query(({ ctx, input }) => {
       const now = new Date().toISOString();
-      const futureTime = new Date(Date.now() + input.hoursAhead * 60 * 60 * 1000).toISOString();
+      const until = new Date(Date.now() + input.hoursAhead * 3600_000).toISOString();
 
       return ctx.db
         .select({
@@ -337,13 +133,18 @@ export const bookingsRouter = router({
             eq(bookings.userId, input.userId),
             eq(bookings.status, "booked"),
             sql`${classes.startsAt} >= ${now}`,
-            sql`${classes.startsAt} <= ${futureTime}`,
+            sql`${classes.startsAt} <= ${until}`,
             eq(classes.cancelled, false),
           ),
         )
         .orderBy(classes.startsAt);
     }),
 
+  /**
+   * Check-ins recorded against this class.
+   *
+   * Joins through bookings, so corporate check-ins are not counted. Finding 4.
+   */
   checkinCountFor: staffProcedure
     .input(z.object({ classId: z.number() }))
     .query(async ({ ctx, input }) => {
@@ -356,8 +157,9 @@ export const bookingsRouter = router({
       return { count: Number(result?.count ?? 0) };
     }),
 
+  /** This member's waitlisted places, each with its position in the queue. */
   waitlisted: protectedProcedure.query(async ({ ctx }) => {
-    const waitlistedBookings = await ctx.db
+    const waiting = await ctx.db
       .select({
         bookingId: bookings.id,
         classId: classes.id,
@@ -370,36 +172,24 @@ export const bookingsRouter = router({
       })
       .from(bookings)
       .innerJoin(classes, eq(bookings.classId, classes.id))
-      .where(
-        and(
-          eq(bookings.userId, ctx.user.id),
-          eq(bookings.status, "waitlisted"),
-        ),
-      )
+      .where(and(eq(bookings.userId, ctx.user.id), eq(bookings.status, "waitlisted")))
       .orderBy(asc(classes.startsAt));
 
-    // For each waitlisted booking, calculate position in queue
-    const result = await Promise.all(
-      waitlistedBookings.map(async (wb) => {
-        const [{ position }] = await ctx.db
-          .select({ position: sql<number>`count(*)` })
+    return Promise.all(
+      waiting.map(async (entry) => {
+        const [{ ahead }] = await ctx.db
+          .select({ ahead: sql<number>`count(*)` })
           .from(bookings)
           .where(
             and(
-              eq(bookings.classId, wb.classId),
+              eq(bookings.classId, entry.classId),
               eq(bookings.status, "waitlisted"),
-              sql`${bookings.bookedAt} < ${wb.bookedAt}`,
+              sql`${bookings.bookedAt} < ${entry.bookedAt}`,
             ),
           );
 
-        return {
-          ...wb,
-          position: Number(position) + 1, // +1 because we're counting those before us
-        };
+        return { ...entry, position: Number(ahead) + 1 };
       }),
     );
-
-    return result;
   }),
 });
-
