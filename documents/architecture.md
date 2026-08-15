@@ -157,9 +157,29 @@ amount of time, server-side duplication that had already produced two
 contradictory money bugs was worth more than tidying JSX. I would do the
 component layer next; see below.
 
-**I did not fix the 25 findings.** Behaviour preservation was the constraint,
-and the tests prove I held to it. The single exception is finding 17, where four
-copies of a role check became one middleware enforcing the identical rule.
+**I fixed 4 of the 25 findings; the other 21 I left alone.** Behaviour
+preservation was the constraint, and the 160 tests written before any code
+moved prove I held to it for everything I didn't touch. Finding 17 (four
+copies of a role check collapsed to one middleware) was a pure code change —
+no observable behaviour moved. Findings 6, 9 and 7 were genuine behaviour
+changes, made once the restructure had already made each of them small and
+contained, each in its own commit with its pinning test flipped from `NOTE` to
+`FIXED`:
+
+- **Finding 6** — rescheduling out of a class now promotes the waitlist,
+  through the same `promoteNextInLine` that `cancel` already used.
+- **Finding 9** — a studio-cancelled class now refunds and notifies every
+  member it was already cancelling the booking for. Not widened to also cover
+  finding 10 (waitlisted/corporate bookings) — that's a decision about scope,
+  not about refunding, and it wasn't mine to fold in silently.
+- **Finding 7** — `classes.byId`'s roster is now staff-only, the same gate
+  `bookings.rosterFor` already used. Nothing in `src/app` called the public
+  version, so nothing broke.
+
+I picked these three because each had one defensible right answer reachable in
+the time available, not because they were the most severe — findings 2 and 11
+are more consequential but each needs a real decision about who is affected by
+a changed number, which isn't something to make silently under a deadline.
 
 **I did not add transactions.** Every booking mutation is a sequence of
 unprotected statements and two members can take the same last seat (finding 24).
@@ -168,18 +188,15 @@ with load testing behind it, not a quiet inclusion in a refactor.
 
 ## What I would do next, in order
 
-1. **Fix finding 6** — rescheduling out of a class does not promote the
-   waitlist. One clear right answer, and the promotion logic is now a single
-   function in `service.ts`, so it is about four lines.
-2. **Fix finding 9** — a studio-cancelled class refunds nobody and notifies
-   nobody. Most likely to generate a complaint.
-3. **Fix finding 11** — `admin.classUtilisation` returns a number unrelated to
+1. **Fix finding 11** — `admin.classUtilisation` returns a number unrelated to
    the data. A test is written and ready to be inverted.
-4. **Close finding 7** — the public class roster exposes member emails.
-5. **Unify seat counting (finding 2)** — one count across both tables. This is
+2. **Unify seat counting (finding 2)** — one count across both tables. This is
    why `countConfirmedSeats` is its own function taking a table: the fix is
    contained to it and its callers.
-6. **Then the component layer** — extract the repeated panel/badge/button
+3. **Finish finding 21** — `waitlist_promotion` and `membership_expiring` still
+   never fire, now that `class_cancelled` does.
+4. **Add transactions (finding 24)** — with load testing behind it.
+5. **Then the component layer** — extract the repeated panel/badge/button
    patterns, move the inline hex to the CSS variables that already exist in
    `globals.css`, and give `kiosk/page.tsx` a real type.
 
@@ -188,7 +205,7 @@ with load testing behind it, not a quiet inclusion in a refactor.
 Unchanged from the original README, plus:
 
 ```bash
-pnpm test          # 160 characterization tests, ~8s
+pnpm test          # 163 characterization tests, ~8s
 npx tsc --noEmit   # typecheck without stopping the dev server
 ```
 

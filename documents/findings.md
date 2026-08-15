@@ -6,10 +6,13 @@ the test that demonstrates it. Run `pnpm test` and they all pass: the suite
 describes what the app **does**, not what it should do.
 
 The default decision is **document, do not fix**. The brief asks for behaviour
-to be preserved exactly, and a refactor that quietly changes twenty three
+to be preserved exactly, and a refactor that quietly changes twenty five
 behaviours is not a refactor. Anything I did change is called out explicitly at
 the bottom, in its own commit, with the characterization test updated in the
-same commit so the change is visible in the diff rather than buried.
+same commit so the change is visible in the diff rather than buried. Four of
+the twenty five ended up fixed, once the restructure had 160 tests protecting
+everything else — see "What I changed" at the bottom for which, and why those
+four specifically.
 
 Severity is my own judgement about what a studio manager would care about:
 
@@ -19,33 +22,33 @@ Severity is my own judgement about what a studio manager would care about:
   and not another.
 - **Low** — dead code, naming, or a sharp edge nobody has hit yet.
 
-| # | Area | Severity | Summary |
-|---|------|----------|---------|
-| 1 | Waitlist | High | Promotion charges a member who cannot afford it, clamping to zero |
-| 2 | Capacity | High | Capacity is counted per table, so a class can be filled twice over |
-| 3 | Corporate credits | High | A promoted corporate member with an empty pool gets the class free |
-| 4 | Check-ins | Medium | Corporate check-ins are unlinked and invisible to class counts |
-| 5 | Rosters | Medium | Two separate rosters, neither shows who is actually in the room |
-| 6 | Waitlist | High | Rescheduling out of a class leaves the seat empty, nobody is promoted |
-| 7 | Privacy | High | The class roster, including member emails, is public |
-| 8 | Capacity | Medium | Capacity can be lowered below the number already booked |
-| 9 | Class cancellation | High | Cancelling a class refunds nobody and notifies nobody |
-| 10 | Class cancellation | Medium | Cancellation ignores waitlisted and corporate bookings |
-| 11 | Reporting | High | `classUtilisation` reports the same wrong figure for every class |
-| 12 | Membership | Medium | An expired membership is still displayed as active |
-| 13 | Kiosk lookup | Medium | First row wins, and an empty query is a wildcard |
-| 14 | Membership | Medium | Subscribing twice stacks memberships and strands credits |
-| 15 | Refunds | High | A refunded membership keeps its credits and its future bookings |
-| 16 | Auth | Low | The `trim()` on the login email is unreachable |
-| 17 | Roles | Medium | The trainer routes lock admins out |
-| 18 | Scheduling | Medium | Availability is compared in UTC, not the studio's timezone |
-| 19 | Scheduling | Medium | `checkAvailability` exists but nothing calls it |
-| 20 | Notifications | Low | `broadcast` reaches deactivated members |
-| 21 | Notifications | Medium | Three of the four notification types are never written |
-| 22 | Corporate | Medium | A member can be linked to several companies at once |
-| 23 | Corporate | Medium | Deactivating a company strands its members' bookings |
-| 24 | Concurrency | High | No booking operation is transactional |
-| 25 | Policy | Medium | Three different cancellation windows, no stated reason |
+| # | Area | Severity | Status | Summary |
+|---|------|----------|--------|---------|
+| 1 | Waitlist | High | Left alone | Promotion charges a member who cannot afford it, clamping to zero |
+| 2 | Capacity | High | Left alone | Capacity is counted per table, so a class can be filled twice over |
+| 3 | Corporate credits | High | Left alone | A promoted corporate member with an empty pool gets the class free |
+| 4 | Check-ins | Medium | Left alone | Corporate check-ins are unlinked and invisible to class counts |
+| 5 | Rosters | Medium | Left alone | Two separate rosters, neither shows who is actually in the room |
+| 6 | Waitlist | High | **Fixed** | Rescheduling out of a class leaves the seat empty, nobody is promoted |
+| 7 | Privacy | High | **Fixed** | The class roster, including member emails, is public |
+| 8 | Capacity | Medium | Left alone | Capacity can be lowered below the number already booked |
+| 9 | Class cancellation | High | **Fixed** | Cancelling a class refunds nobody and notifies nobody |
+| 10 | Class cancellation | Medium | Left alone | Cancellation ignores waitlisted and corporate bookings |
+| 11 | Reporting | High | Left alone | `classUtilisation` reports the same wrong figure for every class |
+| 12 | Membership | Medium | Left alone | An expired membership is still displayed as active |
+| 13 | Kiosk lookup | Medium | Left alone | First row wins, and an empty query is a wildcard |
+| 14 | Membership | Medium | Left alone | Subscribing twice stacks memberships and strands credits |
+| 15 | Refunds | High | Left alone | A refunded membership keeps its credits and its future bookings |
+| 16 | Auth | Low | Left alone | The `trim()` on the login email is unreachable |
+| 17 | Roles | Medium | **Partially fixed** | The trainer routes lock admins out |
+| 18 | Scheduling | Medium | Left alone | Availability is compared in UTC, not the studio's timezone |
+| 19 | Scheduling | Medium | Left alone | `checkAvailability` exists but nothing calls it |
+| 20 | Notifications | Low | Left alone | `broadcast` reaches deactivated members |
+| 21 | Notifications | Medium | **Partially fixed** | Three of the four notification types are never written |
+| 22 | Corporate | Medium | Left alone | A member can be linked to several companies at once |
+| 23 | Corporate | Medium | Left alone | Deactivating a company strands its members' bookings |
+| 24 | Concurrency | High | Left alone | No booking operation is transactional |
+| 25 | Policy | Medium | Left alone | Three different cancellation windows, no stated reason |
 
 ---
 
@@ -193,10 +196,15 @@ This is the clearest example of what happens when the same operation is written
 twice in two files: `reschedule` is a cancel plus a book, but it reimplements
 both halves and forgets a piece of each.
 
-**Left alone**, but flagged as the finding I would fix first. It is the one with
-a single obvious right answer — the promotion block from `cancel` should run —
-and the restructure puts that block in one shared place, so the fix becomes
-about four lines.
+**Fixed.** This was the finding with a single obvious right answer, and the
+restructure had already put the promotion logic in one place
+(`createSeatFlow`'s `promoteNextInLine`) to make exactly this fix small.
+`reschedules.ts` now calls it — `personalSeats.promoteNextInLine(ctx.db,
+originalClass)` — whenever the booking being moved away from was `booked`
+(not `waitlisted`), the same condition `cancel` already used. The test that
+pinned the bug (`NOTE finding 6`) now asserts the fix; a new test pins the
+companion case — moving a *waitlisted* booking frees no seat, so it correctly
+promotes nobody.
 
 ---
 
@@ -212,10 +220,16 @@ reach the app can enumerate class ids and harvest the membership list.
 `staffProcedure`. The public one appears to have grown a roster later without
 anyone revisiting its access level.
 
-**Left alone in the refactor**, because removing the roster changes what
-`classes.byId` returns and something may depend on it. Of everything here this
-is the one I would escalate rather than schedule: it is a data protection
-problem, not a bug.
+**Fixed.** No page in `src/app` or `src/components` calls `classes.byId` — it
+is reachable only by calling the API directly, so restricting it had no known
+caller to break. It now returns the roster only when the caller is staff
+(`ctx.user?.role === "admin" || "trainer"`), the same gate `bookings.rosterFor`
+already used. Anyone else — signed out, or a signed-in member — gets `roster:
+[]`; the class itself (name, room, time) stays public, since that is the
+schedule people browse before signing in. Three tests cover it: staff sees
+names and emails, an anonymous caller sees an empty roster, and a signed-in
+member who is not staff also sees an empty roster (the case a role check on
+`ctx.user` alone would have missed).
 
 ---
 
@@ -246,8 +260,15 @@ cancellation, which is entirely the studio's fault, refunds nothing at all.
 Nobody is notified either, although `notifications.type` includes
 `class_cancelled` for exactly this purpose. Members find out by turning up.
 
-**Left alone**, and this is the second one I would fix. It is the most likely to
-generate an angry phone call.
+**Fixed, within the scope `classes.cancel` already touched.** For every
+booking this procedure was already marking `cancelled` — confirmed, personal
+bookings — it now also calls `membershipLedger.refund` (the same refund path
+`bookings.cancel` uses) and writes a `class_cancelled` notification naming the
+class. Deliberately **not** widened to also cover waitlisted or corporate
+bookings — that is finding 10, a separate question about which bookings this
+procedure touches at all, not what happens to the ones it already touches.
+Fixing 9 without also fixing 10 leaves a smaller, still-documented gap rather
+than a silently expanded one.
 
 ---
 
@@ -264,7 +285,12 @@ and still show it on their waitlist page with a queue position. Corporate
 bookings are not touched at all: they stay confirmed, and their credits stay
 spent.
 
-**Left alone.**
+**Left alone**, including after fixing finding 9. Refunding and notifying the
+bookings this procedure already reaches was a contained, defensible fix;
+deciding what a cancelled class should do to a waitlisted booking, or to a
+corporate one paid from a company pool, is a bigger question — arguably the
+same "one seat count over both tables" decision that finding 2 is left alone
+for — and not one to fold in under time pressure.
 
 ---
 
@@ -499,16 +525,20 @@ next to this entry than half-fix it.
 **Severity: Medium** · whole app · Test: *NOTE finding 21*
 
 `notifications.type` declares `waitlist_promotion`, `class_cancelled`,
-`membership_expiring` and `announcement`. `broadcast` is the only writer in the
-entire codebase and always sends `announcement`.
+`membership_expiring` and `announcement`. Originally, `broadcast` was the only
+writer in the entire codebase and always sent `announcement` — none of the
+other three ever fired.
 
-So the three events a member would actually want to hear about — you got a seat,
-your class is off, your membership runs out next week — are modelled, rendered
-by the notifications page, and never fire. `admin.expiringMemberships` computes
-exactly the list that `membership_expiring` needs and only shows it to admins.
+**Partially addressed, as a side effect of fixing finding 9.** `classes.cancel`
+now writes `class_cancelled`, so that one is live. `waitlist_promotion` and
+`membership_expiring` are still never written — a member who gets promoted off
+a waitlist, or whose membership is about to expire, still finds out by
+noticing rather than being told. `admin.expiringMemberships` computes exactly
+the list `membership_expiring` needs and only shows it to admins.
 
-**Left alone.** This is unimplemented product, not a bug, but it is worth
-stating plainly because the schema makes the app look like it notifies people.
+**Left alone otherwise.** This remainder is unimplemented product, not a bug,
+but it is worth stating plainly because the schema still makes the app look
+more complete than it is.
 
 ---
 
@@ -592,23 +622,46 @@ the divergence is visible. See `architecture.md`.
 
 ## What I changed
 
-Nothing in this list, with one exception.
+Four findings, out of twenty-five.
 
 **Finding 17**, partially: the four duplicated role checks in `trainers.ts`
 became a `trainerProcedure` middleware enforcing the identical rule. Admins are
 still refused. This is a code change with no behaviour change, and the
 characterization test that pins the admin refusal still passes untouched.
 
+**Findings 6, 9 and 7**, after the restructure was in place and behaviour was
+already protected by 160 passing tests. Each was a genuine behaviour change —
+unlike finding 17 — made deliberately, one per commit, with its pinning test
+flipped from `NOTE` to `FIXED` in the same commit and a companion test added
+for the case next to it:
+
+- **6** — rescheduling out of a class now promotes the waitlist, calling the
+  same `promoteNextInLine` that `cancel` already used.
+- **9** — cancelling a class now refunds the members it was already touching
+  and notifies them, without expanding to the waitlisted/corporate bookings
+  finding 10 covers.
+- **7** — `classes.byId`'s roster (names and emails) is now staff-only, the
+  same gate `bookings.rosterFor` already used; nothing in the app called the
+  public version, so nothing broke.
+
+Each was chosen because it had a single defensible right answer reachable in
+the time available — not because it was the most severe. Finding 2 (capacity
+counted per table) and finding 11 (the utilisation query) are more consequential
+but each needs a real decision about who is affected by the change in count,
+which is not something to make silently under a deadline.
+
 Everything else in the restructure is behaviour-preserving by construction: the
-160 tests written before any code moved pass unchanged afterwards. Where the
-tests were edited, it was to add coverage, never to relax an assertion — the
-diff shows this.
+160 characterization tests written before any code moved still pass, now
+alongside 3 new tests added for the fixes above (163 total). Where a test was
+edited rather than added, it was to assert the corrected behaviour in place of
+the bug it used to pin — never to relax an assertion — and the diff shows this.
 
 ## What I would do first, given another week
 
-1. **Finding 6** — waitlist promotion on reschedule. One right answer, small fix.
-2. **Finding 9** — refund and notify on class cancellation. Most user-visible.
-3. **Finding 11** — the utilisation query. Admins are reading a number that means nothing.
-4. **Finding 7** — close the public roster. Should not wait for a sprint.
-5. **Finding 2** — unified seat counting. Largest, and the restructure was
+1. **Finding 11** — the utilisation query. Admins are reading a number that means nothing.
+2. **Finding 2** — unified seat counting. Largest, and the restructure was
    partly shaped to make it tractable.
+3. **Finding 21, the rest of it** — `waitlist_promotion` and
+   `membership_expiring` still never fire, now that `class_cancelled` does.
+4. **Finding 24** — transactions around booking. Needs load testing behind it,
+   which is exactly why it wasn't attempted alongside 6, 9 and 7.

@@ -16,7 +16,8 @@ The short version: the studio's rules used to live inside the tRPC routers,
 which meant they were duplicated — `corporate-bookings.ts` was a copy of
 `bookings.ts` that had drifted into the opposite bug on the same code path. The
 rules now live in `src/server/modules/`, the routers are transport, and 160
-tests written against the original code still pass.
+tests written against the original code still pass — plus 3 more added
+alongside the 4 findings (of 25) that got fixed rather than just documented.
 
 ## Requirements
 
@@ -57,7 +58,7 @@ Every seeded member uses `member123`. The other member emails are in `src/db/see
 | --------------- | ------------------------------------------------- |
 | `pnpm dev`      | Development server on port 3000                    |
 | `pnpm build`    | Production build                                   |
-| `pnpm test`     | The characterization suite, about 8 seconds        |
+| `pnpm test`     | The characterization suite, 163 tests, about 8 seconds |
 | `pnpm db:push`  | Apply the schema in `src/db/schema/`               |
 | `pnpm db:seed`  | Wipe the data and reseed                           |
 | `pnpm db:reset` | Delete the database file, then push and seed again |
@@ -70,9 +71,11 @@ Every seeded member uses `member123`. The other member emails are in `src/db/see
 pnpm test
 ```
 
-160 tests describing what the app **does**, not what it should do. They were
+163 tests describing what the app **does**, not what it should do. 160 were
 written against the original code before any of it moved, and they are the
-reason the restructure can claim to preserve behaviour.
+reason the restructure can claim to preserve behaviour everywhere it wasn't
+deliberately changed. The other 3 were added alongside the fixes to findings
+6, 9 and 7 — see [documents/findings.md](documents/findings.md).
 
 They need no database and no running server. Each test builds a fresh in-memory
 SQLite from the generated migration SQL and calls procedures through
