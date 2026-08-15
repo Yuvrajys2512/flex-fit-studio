@@ -11,6 +11,7 @@ import {
   makeUser,
   makeAdmin,
   makeTrainer,
+  makeMembership,
   makeClass,
   makeCompany,
   linkToCompany,
@@ -306,19 +307,36 @@ describe("notifications", () => {
     );
   });
 
-  it("NOTE finding 21: no procedure ever writes the three non-announcement types", async () => {
-    // waitlist_promotion, class_cancelled and membership_expiring are declared
-    // in the schema and rendered by the notifications page, but broadcast is
-    // the only writer in the app and it always sends "announcement".
-    const admin = await makeAdmin(db);
+  it("NOTE finding 21: waitlist_promotion and membership_expiring are still never written", async () => {
+    // Declared in the schema and rendered by the notifications page, but
+    // nothing writes them. class_cancelled is no longer in this list — the
+    // Project 1 restructure fixed finding 9, which writes it on class
+    // cancellation. broadcast (announcement) is still the only other writer.
     const user = await makeUser(db);
+    await makeMembership(db, user.id);
     const cls = await makeClass(db, { capacity: 1 });
-    await db
-      .insert(schema.bookings)
-      .values({ classId: cls.id, userId: user.id, status: "booked" });
+    await callerFor(db, user).bookings.book({ classId: cls.id });
 
-    await callerFor(db, admin).classes.cancel({ id: cls.id });
+    const waiter = await makeUser(db);
+    const waiterMs = await makeMembership(db, waiter.id);
+    await db.insert(schema.bookings).values({
+      classId: cls.id,
+      userId: waiter.id,
+      membershipId: waiterMs.id,
+      status: "waitlisted",
+      creditsUsed: 0,
+    });
 
+    const booking = await db
+      .select()
+      .from(schema.bookings)
+      .where(eq(schema.bookings.userId, user.id))
+      .get();
+
+    // The cancel promotes the waitlisted member into a real seat...
+    await callerFor(db, user).bookings.cancel({ bookingId: booking!.id });
+
+    // ...but no waitlist_promotion notification is ever written for it.
     expect(await db.select().from(schema.notifications)).toEqual([]);
   });
 });

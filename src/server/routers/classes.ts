@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { and, asc, eq, gte, lte, sql } from "drizzle-orm";
-import { classes, bookings, users } from "@/db/schema";
+import { classes, bookings, notifications, users } from "@/db/schema";
 import { router, publicProcedure, staffProcedure, adminProcedure } from "../trpc";
+import { membershipLedger } from "../modules/booking/ledger";
 
 export const classesRouter = router({
   list: publicProcedure
@@ -143,12 +144,37 @@ export const classesRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Class not found." });
       }
 
+      // Fixed: finding 9. Same scope as before — confirmed personal bookings
+      // only, same as the cancellation this already performed (finding 10,
+      // waitlisted and corporate bookings, is left alone: that is about which
+      // bookings get touched at all, a separate decision from what happens to
+      // the ones that were already being touched here).
+      const affected = await ctx.db
+        .select()
+        .from(bookings)
+        .where(and(eq(bookings.classId, input.id), eq(bookings.status, "booked")));
+
       await ctx.db
         .update(bookings)
         .set({ status: "cancelled", cancelledAt: new Date().toISOString() })
         .where(
           and(eq(bookings.classId, input.id), eq(bookings.status, "booked")),
         );
+
+      for (const booking of affected) {
+        await membershipLedger.refund(ctx.db, booking);
+      }
+
+      if (affected.length > 0) {
+        await ctx.db.insert(notifications).values(
+          affected.map((booking) => ({
+            userId: booking.userId,
+            type: "class_cancelled" as const,
+            title: "Class cancelled",
+            message: `${cls.name} on ${cls.startsAt} was cancelled by the studio. Your credits have been refunded.`,
+          })),
+        );
+      }
 
       return cls;
     }),

@@ -218,7 +218,7 @@ describe("classes.cancel", () => {
     expect(after!.cancelledAt).not.toBeNull();
   });
 
-  it("NOTE finding 9: cancelling a class refunds nobody", async () => {
+  it("FIXED finding 9: cancelling a class refunds the credits members paid", async () => {
     const admin = await makeAdmin(db);
     const user = await makeUser(db);
     const membership = await makeMembership(db, user.id, { creditsRemaining: 10 });
@@ -232,19 +232,47 @@ describe("classes.cancel", () => {
       .from(schema.memberships)
       .where(eq(schema.memberships.id, membership.id))
       .get();
-    // The member paid 3 credits for a class the gym cancelled and keeps losing them.
-    expect(after!.creditsRemaining).toBe(7);
+    // The member paid 3 credits for a class the gym cancelled and gets them back.
+    expect(after!.creditsRemaining).toBe(10);
   });
 
-  it("NOTE finding 9: cancelling a class notifies nobody, though the notification type exists", async () => {
+  it("FIXED finding 9: cancelling a class notifies the members who were booked", async () => {
     const admin = await makeAdmin(db);
     const user = await makeUser(db);
-    const cls = await makeClass(db);
+    const cls = await makeClass(db, { name: "Spin" });
     await seedBooking(db, { classId: cls.id, userId: user.id, status: "booked" });
 
     await callerFor(db, admin).classes.cancel({ id: cls.id });
 
-    expect(await db.select().from(schema.notifications)).toEqual([]);
+    const sent = await db.select().from(schema.notifications);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({
+      userId: user.id,
+      type: "class_cancelled",
+      title: "Class cancelled",
+    });
+    expect(sent[0].message).toContain("Spin");
+  });
+
+  it("does not refund or notify a member whose membership has no matching account left to credit", async () => {
+    // A booking with no membershipId (e.g. seeded directly) should not throw
+    // when the refund step runs — membershipLedger.refund treats it as a no-op.
+    const admin = await makeAdmin(db);
+    const user = await makeUser(db);
+    const cls = await makeClass(db);
+    await seedBooking(db, {
+      classId: cls.id,
+      userId: user.id,
+      status: "booked",
+      creditsUsed: 2,
+      membershipId: null,
+    });
+
+    const result = await callerFor(db, admin).classes.cancel({ id: cls.id });
+    expect(result.cancelled).toBe(true);
+
+    const sent = await db.select().from(schema.notifications);
+    expect(sent).toHaveLength(1);
   });
 
   it("NOTE finding 10: leaves waitlisted bookings active and never touches corporate bookings", async () => {
