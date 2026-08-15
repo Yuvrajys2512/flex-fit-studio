@@ -115,7 +115,7 @@ describe("reschedules.reschedule", () => {
     expect((await readBooking(db, booking.id))!.status).toBe("cancelled");
   });
 
-  it("NOTE finding 6: leaves the vacated seat empty instead of promoting the waitlist", async () => {
+  it("FIXED finding 6: rescheduling out of a class promotes the waitlist, same as cancel", async () => {
     const user = await makeUser(db);
     await makeMembership(db, user.id);
     const from = await makeClass(db, { name: "Yoga", capacity: 1, startsAt: hoursFromNow(48) });
@@ -137,9 +137,40 @@ describe("reschedules.reschedule", () => {
       toClassId: to.id,
     });
 
-    // bookings.cancel would have promoted this member. Rescheduling does not,
-    // so the seat sits empty and the waitlist never moves.
+    // The vacated seat is now passed on, the same way bookings.cancel does it.
+    expect((await readBooking(db, wait.id))!.status).toBe("booked");
+  });
+
+  it("does not promote anyone when the booking that moved was itself waitlisted", async () => {
+    const user = await makeUser(db);
+    const membership = await makeMembership(db, user.id);
+    const from = await makeClass(db, { name: "Yoga", capacity: 1, startsAt: hoursFromNow(48) });
+    const to = await makeClass(db, { name: "Yoga", startsAt: hoursFromNow(72) });
+    const filler = await makeUser(db);
+    await seedBooking(db, { classId: from.id, userId: filler.id, status: "booked" });
+    const booking = await callerFor(db, user).bookings.book({ classId: from.id });
+    expect(booking.status).toBe("waitlisted");
+
+    const waiter = await makeUser(db);
+    const waiterMs = await makeMembership(db, waiter.id);
+    const wait = await seedBooking(db, {
+      classId: from.id,
+      userId: waiter.id,
+      membershipId: waiterMs.id,
+      status: "waitlisted",
+      creditsUsed: 0,
+      bookedAt: hoursFromNow(-1),
+    });
+
+    await callerFor(db, user).reschedules.reschedule({
+      fromBookingId: booking.id,
+      toClassId: to.id,
+    });
+
+    // No seat was freed — the mover never held a confirmed one — so the
+    // filler's seat stands and the other waitlisted member is untouched.
     expect((await readBooking(db, wait.id))!.status).toBe("waitlisted");
+    void membership;
   });
 
   it("allows rescheduling a waitlisted booking", async () => {

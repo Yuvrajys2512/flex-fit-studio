@@ -38,6 +38,12 @@ export interface SeatFlow<TAccount, TBooking> {
     actor: Pick<User, "id" | "role">,
     bookingId: number,
   ): Promise<{ ok: true; refunded: boolean }>;
+  /**
+   * Confirms whoever has waited longest for `cls`, if anyone has. Callers that
+   * free a confirmed seat outside of `cancel` (reschedule, class cancellation)
+   * call this so the waitlist moves the same way it does for a plain cancel.
+   */
+  promoteNextInLine(db: Db, cls: Pick<GymClass, "id" | "creditCost">): Promise<void>;
 }
 
 /**
@@ -54,7 +60,9 @@ export function createSeatFlow<TAccount, TBooking extends SeatRow>(
    * Confirms the member who has waited longest, if there is one.
    *
    * Only called when a *confirmed* seat is released — releasing a waitlisted
-   * place moves nobody, because no seat was freed.
+   * place moves nobody, because no seat was freed. Exported as
+   * `promoteNextInLine` on the returned flow so callers other than `cancel`
+   * (reschedule, class cancellation) can free a seat through the same path.
    */
   async function promoteNextInLine(db: Db, cls: Pick<GymClass, "id" | "creditCost">) {
     const next = (await db
@@ -154,5 +162,7 @@ export function createSeatFlow<TAccount, TBooking extends SeatRow>(
 
       return { ok: true as const, refunded };
     },
+
+    promoteNextInLine,
   };
 }

@@ -9,6 +9,7 @@ import { desc, eq, sql } from "drizzle-orm";
 import { reschedules, bookings, classes } from "@/db/schema";
 import { router, protectedProcedure } from "../trpc";
 import { evaluateReschedule, toTRPCError } from "../modules/reschedule/rules";
+import { personalSeats } from "../modules/booking";
 
 const rescheduleInput = z.object({
   fromBookingId: z.number(),
@@ -50,8 +51,12 @@ export const reschedulesRouter = router({
         .set({ status: "cancelled", cancelledAt: new Date().toISOString() })
         .where(eq(bookings.id, booking.id));
 
-      // Releasing a confirmed seat here does *not* promote the waitlist, where
-      // bookings.cancel would. Preserved: documents/findings.md, finding 6.
+      // Fixed: finding 6. Releasing a confirmed seat here now promotes the
+      // waitlist the same way bookings.cancel does — only a `booked` (not
+      // `waitlisted`) original was occupying a seat worth passing on.
+      if (booking.status === "booked") {
+        await personalSeats.promoteNextInLine(ctx.db, originalClass);
+      }
 
       await ctx.db.insert(reschedules).values({
         userId: ctx.user.id,
