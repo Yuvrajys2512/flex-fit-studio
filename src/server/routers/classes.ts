@@ -65,16 +65,23 @@ export const classesRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Class not found." });
       }
 
-      const roster = await ctx.db
-        .select({
-          bookingId: bookings.id,
-          status: bookings.status,
-          memberName: users.name,
-          memberEmail: users.email,
-        })
-        .from(bookings)
-        .innerJoin(users, eq(bookings.userId, users.id))
-        .where(eq(bookings.classId, cls.id));
+      // Fixed: finding 7. The class itself (name, room, time) stays public —
+      // that's the schedule. The roster is member names and emails, which is
+      // exactly what bookings.rosterFor already gates behind staffProcedure;
+      // this endpoint had grown a second, ungated copy of the same data.
+      const isStaff = ctx.user?.role === "admin" || ctx.user?.role === "trainer";
+      const roster = isStaff
+        ? await ctx.db
+            .select({
+              bookingId: bookings.id,
+              status: bookings.status,
+              memberName: users.name,
+              memberEmail: users.email,
+            })
+            .from(bookings)
+            .innerJoin(users, eq(bookings.userId, users.id))
+            .where(eq(bookings.classId, cls.id))
+        : [];
 
       return { ...cls, roster };
     }),

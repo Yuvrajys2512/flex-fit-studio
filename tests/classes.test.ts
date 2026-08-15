@@ -117,7 +117,7 @@ describe("classes.list", () => {
 });
 
 describe("classes.byId", () => {
-  it("returns the class with its roster", async () => {
+  it("returns the class itself to anyone, without a roster", async () => {
     const cls = await makeClass(db);
     const user = await makeUser(db, { name: "Sana" });
     await seedBooking(db, { classId: cls.id, userId: user.id, status: "booked" });
@@ -125,17 +125,29 @@ describe("classes.byId", () => {
     const result = await callerFor(db, null).classes.byId({ id: cls.id });
 
     expect(result.id).toBe(cls.id);
+    expect(result.roster).toEqual([]);
+  });
+
+  it("returns the roster, with names and emails, to staff", async () => {
+    const cls = await makeClass(db);
+    const user = await makeUser(db, { name: "Sana" });
+    await seedBooking(db, { classId: cls.id, userId: user.id, status: "booked" });
+    const admin = await makeAdmin(db);
+
+    const result = await callerFor(db, admin).classes.byId({ id: cls.id });
+
     expect(result.roster).toHaveLength(1);
     expect(result.roster[0].memberName).toBe("Sana");
   });
 
-  it("NOTE finding 7: the roster is public, exposing member names and emails to anyone", async () => {
+  it("FIXED finding 7: a plain member (signed in, not staff) does not see the roster either", async () => {
     const cls = await makeClass(db);
-    const user = await makeUser(db, { name: "Sana", email: "sana@private.test" });
-    await seedBooking(db, { classId: cls.id, userId: user.id, status: "booked" });
+    const booked = await makeUser(db, { name: "Sana", email: "sana@private.test" });
+    await seedBooking(db, { classId: cls.id, userId: booked.id, status: "booked" });
+    const viewer = await makeUser(db);
 
-    const result = await callerFor(db, null).classes.byId({ id: cls.id });
-    expect(result.roster[0].memberEmail).toBe("sana@private.test");
+    const result = await callerFor(db, viewer).classes.byId({ id: cls.id });
+    expect(result.roster).toEqual([]);
   });
 
   it("rejects an unknown class", async () => {
