@@ -7,6 +7,9 @@ Class booking and membership management for a single gym site. Members book clas
 This is a restructured version of the original codebase. Behaviour is unchanged
 and there is a test suite that proves it.
 
+> **About the commit history:** commits by `Admin-1` … `Admin-5` are the original codebase this project started from.
+> My work starts at *"Add characterization test suite covering current behaviour"* (August 2026).
+
 | Document | What it is |
 | --- | --- |
 | [documents/architecture.md](documents/architecture.md) | How the code is arranged and why. Read this first. |
